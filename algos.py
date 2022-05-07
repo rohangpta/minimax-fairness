@@ -2,7 +2,8 @@ from math import log, sqrt
 from random import choices
 import numpy as np
 
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, SGDClassifier
+from random import choice
 
 
 def PolyWeights(experts, observe, loss, T, lr=None):
@@ -29,12 +30,32 @@ def LinReg(X, y, wts):
     return reg
 
 
+def SGD(X, y, wts):
+    reg = SGDClassifier()
+    reg.fit(X, y, sample_weight=wts)
+    return reg
+
+
 def filter_grp(x, y, g_):
     return x[g_], y[g_]
 
 
-def eps_k(h, L, x_k, y_k):
-    return L(y_k, h.predict(x_k))
+def eps_k(h, L, x_k, y_k, round=False):
+    return L(y_k, h.predict(x_k) if not round else h.predict(x_k).round())
+
+
+def eps_k_rand(H, L, x_k, y_k, round=False):
+    N = len(y_k)
+    models = [choice(H) for _ in range(N)]
+    preds = [
+        (
+            models[i].predict(x_k[i].reshape(1, -1))
+            if not round
+            else models[i].predict(x_k[i].reshape(1, -1)).round()
+        ).item()
+        for i in range(N)
+    ]
+    return L(y_k, preds)
 
 
 def weights_updater(lr, err, old_wts, g_):
@@ -58,3 +79,12 @@ def MinimaxFair(X, y, G, L, T, H_, lr=None):
             weights = weights_updater(lr, err, weights, G[k])
             errs[k] = err
     return H
+
+
+def test(H, X, y, G, L, eps):
+    K = len(G)
+    errs = [None for _ in range(K)]
+    for k in range(K):
+        err = eps(H, L, *filter_grp(X, y, G[k]))
+        errs[k] = err
+    return errs
