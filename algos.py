@@ -5,6 +5,8 @@ import numpy as np
 from sklearn.linear_model import LinearRegression, SGDClassifier
 from random import choice
 
+mapping, columns = None, None
+
 
 def PolyWeights(experts, observe, loss, T, lr=None):
     N = len(experts)
@@ -22,6 +24,41 @@ def PolyWeights(experts, observe, loss, T, lr=None):
 
     # Also return empirical average of weights or alternatively, a N x T matrix to sample uniformly from
     return weights, total_loss
+
+
+def generate_comp_table(x, columns):
+    grp_list = columns
+    x = x.filter(items=grp_list)
+    mapping = {}
+    for item in x.columns:
+        mapping[item] = x[item].value_counts() / len(x[item])
+    return mapping
+
+
+def G_(model, x, y, n):
+    preds = np.array(model.predict(x).round(), dtype="int64")
+    y = np.array(y, dtype="int64")
+    wrong = y ^ preds
+    wrong_idx = np.nonzero(wrong)
+
+    dataset = x.loc[wrong_idx]
+    filt = dataset.filter(items=columns)
+    size = len(filt)
+    op = []
+    for col in filt.columns:
+        dist = filt[col].value_counts() / size
+        rdist = mapping[col][dist.index]
+        rdist = (rdist) / rdist.sum()
+        diff = dist - rdist
+
+        if not len(diff):
+            continue
+        argmax = diff.idxmax()
+
+        if 500 <= dist.loc[argmax] * size <= (0.6 * size):
+            op.append([col, argmax, max(diff)])
+    top_n = sorted(op, key=lambda x: x[2], reverse=True)[:n]
+    return [np.where(x[col] == argmax) for col, argmax, _ in top_n]
 
 
 def LinReg(X, y, wts):
