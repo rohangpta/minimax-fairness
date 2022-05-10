@@ -1,8 +1,9 @@
-from math import log, sqrt
+from math import log
 from random import choices
 import numpy as np
-
-from sklearn.linear_model import LinearRegression, SGDClassifier
+from functools import reduce
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.ensemble import GradientBoostingClassifier
 from random import choice
 
 mapping, columns = None, None
@@ -22,8 +23,29 @@ def PolyWeights(experts, observe, loss, T, lr=None):
         weights = np.apply_along_axis(f, t, weights)
         total_loss += loss(selected, outcome)
 
-    # Also return empirical average of weights or alternatively, a N x T matrix to sample uniformly from
     return weights, total_loss
+
+
+def MinimaxFair(X, y, G, L, T, H_, lr=None):
+    H = [None for _ in range(T)]
+    N = len(y)
+    K = len(G)
+    weights = np.ones(N) / N
+    overall_errs = []
+
+    for t in range(1, T + 1):
+        lr = 1 / np.sqrt(t)
+        h_t = H_(X, y, weights)
+        H[t - 1] = h_t
+        errs = [None for _ in range(K)]
+        for k in range(K):
+            err = eps_k(h_t, L, *filter_grp(X, y, G[k]))
+            weights = weights_updater(lr, err, weights, G[k])
+            errs[k] = err
+        overall_errs.append(errs)
+        if (t - 1) % 10 == 0:
+            print(f"Iteration {t-1}")
+    return H, overall_errs
 
 
 def generate_comp_table(x, columns):
@@ -58,7 +80,21 @@ def G_(model, x, y, n):
         if 500 <= dist.loc[argmax] * size <= (0.6 * size):
             op.append([col, argmax, max(diff)])
     top_n = sorted(op, key=lambda x: x[2], reverse=True)[:n]
-    return [np.where(x[col] == argmax) for col, argmax, _ in top_n]
+    return [np.where(x[col] == argmax) for col, argmax, _ in top_n], [
+        (col, argmax) for col, argmax, _ in top_n
+    ]
+
+
+def remove_intersect(l):
+    n = len(l)
+    output = [None for _ in range(n)]
+    for i in range(n):
+        output[i] = np.setdiff1d(l[i], l[i + 1]) if i < n - 1 else l[i]
+        for j in range(i + 2, n):
+            output[i] = np.setdiff1d(output[i], l[j])
+
+    assert len(reduce(np.union1d, l)) == len(reduce(np.union1d, output))
+    return output
 
 
 def LinReg(X, y, wts):
@@ -67,8 +103,14 @@ def LinReg(X, y, wts):
     return reg
 
 
-def SGD(X, y, wts):
-    reg = SGDClassifier()
+def GBT(X, y, wts):
+    reg = GradientBoostingClassifier(max_depth=3)
+    reg.fit(X, y, sample_weight=wts)
+    return reg
+
+
+def LogReg(X, y, wts):
+    reg = LogisticRegression()
     reg.fit(X, y, sample_weight=wts)
     return reg
 
@@ -78,7 +120,7 @@ def filter_grp(x, y, g_):
 
 
 def eps_k(h, L, x_k, y_k, round=False):
-    return L(y_k, h.predict(x_k) if not round else h.predict(x_k).round())
+    return L(y_k, h.predict(x_k) if not round else h.predict_(x_k).round())
 
 
 def eps_k_rand(H, L, x_k, y_k, round=False):
@@ -98,24 +140,6 @@ def eps_k_rand(H, L, x_k, y_k, round=False):
 def weights_updater(lr, err, old_wts, g_):
     old_wts[g_] = old_wts[g_] * np.exp(lr * err)
     return old_wts
-
-
-def MinimaxFair(X, y, G, L, T, H_, lr=None):
-    H = [None for _ in range(T)]
-    N = len(y)
-    K = len(G)
-    lr = lr if lr else np.log(N) / T
-    weights = np.ones(N) / N
-
-    for t in range(T):
-        h_t = H_(X, y, weights)
-        H[t] = h_t
-        errs = [None for _ in range(K)]
-        for k in range(K):
-            err = eps_k(h_t, L, *filter_grp(X, y, G[k]))
-            weights = weights_updater(lr, err, weights, G[k])
-            errs[k] = err
-    return H
 
 
 def test(H, X, y, G, L, eps):
